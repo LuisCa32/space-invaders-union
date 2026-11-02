@@ -7,20 +7,20 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <title>Space Invaders Union</title>
-<meta name="description" content="Classic Space Invaders, except the aliens go on strike mid-wave. Hold your fire and they negotiate; shoot the strikers and rack up union violations. Free, in your browser, mobile friendly.">
+<meta name="description" content="Classic Space Invaders, except the aliens go on strike mid-wave and you have to make them an offer. Offer pizza and they riot; real benefits cost points. Free, in your browser, mobile friendly.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%23ff7ae0' d='M3 0h2v1h-2zM2 1h4v1h-4zM1 2h6v1h-6zM0 3h2v1h-2zM3 3h2v1h-2zM6 3h2v1h-2zM0 4h8v1h-8zM2 5h1v1h-1zM5 5h1v1h-1zM1 6h1v1h-1zM3 6h2v1h-2zM6 6h1v1h-1zM0 7h1v1h-1zM2 7h1v1h-1zM5 7h1v1h-1zM7 7h1v1h-1z'/%3E%3C/svg%3E">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Space Invaders Union">
 <meta property="og:title" content="Space Invaders Union">
-<meta property="og:description" content="Classic Space Invaders, except the aliens go on strike mid-wave. Hold your fire and they negotiate; shoot the strikers and rack up union violations. Free, in your browser, mobile friendly.">
+<meta property="og:description" content="Classic Space Invaders, except the aliens go on strike mid-wave and you have to make them an offer. Offer pizza and they riot; real benefits cost points. Free, in your browser, mobile friendly.">
 <meta property="og:url" content="https://luisca32.github.io/space-invaders-union/">
 <meta property="og:image" content="https://luisca32.github.io/space-invaders-union/og-image.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="Space Invaders Union: pixel-art aliens on a picket line holding protest signs while their union rep announces a deal.">
+<meta property="og:image:alt" content="Space Invaders Union: pixel-art aliens on a picket line holding protest signs, above a menu offering them a slice of pizza, one extra vacation day, or full dental and a 4-day week.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Space Invaders Union">
-<meta name="twitter:description" content="Classic Space Invaders, except the aliens go on strike mid-wave. Hold your fire and they negotiate; shoot the strikers and rack up union violations. Free, in your browser, mobile friendly.">
+<meta name="twitter:description" content="Classic Space Invaders, except the aliens go on strike mid-wave and you have to make them an offer. Offer pizza and they riot; real benefits cost points. Free, in your browser, mobile friendly.">
 <meta name="twitter:image" content="https://luisca32.github.io/space-invaders-union/og-image.png">
 <style>
   html, body {
@@ -48,7 +48,12 @@ const W = 360, H = 640;                 // logical resolution (portrait 9:16)
 const CW = 36, CH = 30;                 // alien grid cell size
 const PLAYER_Y = 532;
 const ZONE_Y = H * 2 / 3;               // bottom third = steering zone
-const PICKET_TIME = 3.6, NEGOTIATE_TIME = 2.4, TWEEN_TIME = 0.6;
+const TWEEN_TIME = 0.6;                 // aliens walking to / from the picket line
+const MENU_TIME = 7;                    // seconds to make an offer before it counts as no offer
+const MENU_GRACE = 0.6;                 // cards ignore input at first, so a stray FIRE tap can't pick one
+const REACT_TIME = 2.4;                 // the union rep's reply bubble
+const RESERVES_TIME = 1.2;              // reinforcements flying in after an insulting offer
+const LRS_START = 55;                   // Labor Relations Score before any deal
 const SIGN_FS = 9;
 const FONT = 'ui-monospace, Menlo, Consolas, "Courier New", monospace';
 const font = (sz) => `bold ${sz}px ${FONT}`;
@@ -57,34 +62,55 @@ const FIRE_BTN  = { x: 302, y: 598, r: 34 };
 const MUTE_BTN  = { x: 300, y: 20, r: 15 };
 const PAUSE_BTN = { x: 338, y: 20, r: 15 };
 const AGAIN_BTN = { x: 80, y: 552, w: 200, h: 54 };
+const MENU      = { x: 12, y: 366, w: 336, h: 266 };
+const CARD_H = 60, CARD_GAP = 8;
 
 const WAVES = [
-  { cols: 5, rows: 3, speed: 22, fire: 1.25, bullet: 150, name: 'MORNING SHIFT' },
-  { cols: 6, rows: 3, speed: 28, fire: 0.95, bullet: 175, name: 'OVERTIME' },
-  { cols: 6, rows: 4, speed: 34, fire: 0.75, bullet: 195, name: 'GRAVEYARD SHIFT' },
+  { cols: 5, rows: 3, speed: 22, fire: 1.25, bullet: 150, reserves: 6, name: 'MORNING SHIFT' },
+  { cols: 6, rows: 3, speed: 28, fire: 0.95, bullet: 175, reserves: 6, name: 'OVERTIME' },
+  { cols: 6, rows: 4, speed: 34, fire: 0.75, bullet: 195, reserves: 8, name: 'GRAVEYARD SHIFT' },
 ];
 
 const COLORS = { a1: '#ff7ae0', a2: '#5cc8ff', a3: '#5cf2a0' };
-const ANGRY = ['#ff9a3c', '#ff6a3c', '#ff2e2e'];
 const POINTS = { a1: 30, a2: 20, a3: 10 };
+
+// How the aliens behave after a deal, indexed by wave.mood
+const MOODS = [
+  { move: 1,    fire: 1,    bullet: 1,    color: null },       // big benefit: business as usual
+  { move: 1,    fire: 1.45, bullet: 1.12, color: '#ffb03c' },  // small benefit: grumbling, shooting faster
+  { move: 1.45, fire: 1.85, bullet: 1.22, color: '#ff3b3b' },  // insulting offer: furious, and the reserves join
+];
+
+// Offer tiers, always shown in this order. cost is a share of the current score.
+const TIERS = [
+  { mood: 'INSULTING', hint: 'EXPECT TROUBLE',  color: '#ff5a5a', ink: '#c0262d', cost: 0,    lrs: -20 },
+  { mood: 'MEH',       hint: "THEY'LL GRUMBLE", color: '#ffb03c', ink: '#a85f00', cost: 0.25, lrs: 5 },
+  { mood: 'FAIR',      hint: 'BACK TO WORK',    color: '#5cf2a0', ink: '#11804a', cost: 0.5,  lrs: 15 },
+];
+const OFFERS = [
+  [
+    { name: 'A slice of pizza',         icon: 'pizza', reply: 'One slice? For ALL of us?! Call in the reserves!' },
+    { name: 'A "you\'re family" email', icon: 'mail',  reply: "Family doesn't pay rent. Call in the reserves!" },
+    { name: 'One shared fruit bowl',    icon: 'apple', reply: 'A fruit bowl?! Call in the reserves!' },
+  ],
+  [
+    { name: 'One extra vacation day',   icon: 'sun',   reply: 'One whole day. Wow. Back to work... grumbling.' },
+    { name: 'A 2% raise',               icon: 'coin',  reply: "2%? Inflation is 9%. We'll remember this." },
+    { name: 'Dental (cleanings only)',  icon: 'tooth', reply: "Cleanings only? Fine. We're not smiling." },
+  ],
+  [
+    { name: 'Full dental + 4-day week', icon: 'calendar', reply: 'Full dental! Back to work, comrades!' },
+    { name: 'Hazard pay + a pension',   icon: 'shield',   reply: 'Hazard pay AND a pension? Deal!' },
+    { name: 'Healthcare + paid leave',  icon: 'heart',    reply: 'Healthcare for every tentacle! Deal!' },
+  ],
+];
+const TIMEOUT_REPLY = 'No offer at all?! Call in the reserves!';
 
 const SLOGANS = [
   'FAIR WAGES FOR INVADERS', 'WE WANT DENTAL', 'NO MORE LASERS WITHOUT BREAKS',
   'SOLIDARITY', 'ON STRIKE!', '8 HOUR SHIFTS', 'HAZARD PAY NOW', 'ABDUCT RESPONSIBLY',
   'UNION STRONG', 'WE ARE NOT EXPENDABLE', 'PEW PEW IS WORK', 'DOWN WITH THE MOTHERSHIP',
   'PAID LEAVE FOR TENTACLES', 'STOP THE DESCENT',
-];
-const DEALS = [
-  'We got dental! Back to work, comrades.',
-  'Deal: a 5-minute break every 100 lasers.',
-  'Pizza Fridays secured. Resuming invasion.',
-  'Hazard pay approved. Pew pew resumes.',
-  'Management agreed to a 4-day invasion week.',
-];
-const GRUDGES = [
-  "Fine. But we're filing a grievance.",
-  'We return under protest. And we remember.',
-  'Back to work... with FEELINGS.',
 ];
 const WIN_MSGS = [
   'Earth is saved. HR would like a word.',
@@ -117,6 +143,32 @@ const SPR = {
   ship: [[
     '......#......', '.....###.....', '.....###.....', '.###########.', '#############', '#############', '#############', '#############',
   ]],
+};
+
+// 8x8 offer icons, drawn as colored layers
+const ICONS = {
+  pizza: [
+    ['#d08a3a', ['########', '.######.']],
+    ['#ffd24d', ['', '', '.######.', '.######.', '..####..', '..####..', '...##...', '...##...']],
+    ['#d23c3c', ['', '', '..#..#..', '', '...#....']],
+  ],
+  mail: [['#f4ecd8', ['', '########', '##....##', '#.#..#.#', '#..##..#', '#......#', '########']]],
+  apple: [
+    ['#5cf2a0', ['....##..', '...#....']],
+    ['#ff5a5a', ['', '', '.##..##.', '########', '########', '########', '.######.', '..####..']],
+  ],
+  sun: [['#ffd24d', ['...##...', '.#....#.', '..####..', '#.####.#', '#.####.#', '..####..', '.#....#.', '...##...']]],
+  coin: [
+    ['#ffd24d', ['..####..', '.######.', '########', '########', '########', '########', '.######.', '..####..']],
+    ['#a86a1c', ['', '...#....', '..###...', '..#.....', '...##...', '....#...', '..###...', '...#....']],
+  ],
+  tooth: [['#ffffff', ['.######.', '########', '########', '########', '.######.', '.##..##.', '.##..##.', '..#..#..']]],
+  calendar: [
+    ['#ff5a5a', ['.#....#.', '########', '########']],
+    ['#f4ecd8', ['', '', '', '########', '#.#.#.##', '########', '#.#.#.##', '########']],
+  ],
+  shield: [['#5cc8ff', ['########', '#......#', '#.####.#', '#.####.#', '#.####.#', '.#.##.#.', '..#..#..', '...##...']]],
+  heart: [['#ff7ae0', ['', '.##..##.', '########', '########', '########', '.######.', '..####..', '...##...']]],
 };
 
 // ---------------------------------------------------------------------------
@@ -159,6 +211,21 @@ function sprite(name, frame, color) {
   g.fillStyle = color;
   rows.forEach((r, y) => { for (let x = 0; x < r.length; x++) if (r[x] === '#') g.fillRect(x, y, 1, 1); });
   spriteCache[key] = c;
+  return c;
+}
+
+const iconCache = {};
+function iconCanvas(name) {
+  let c = iconCache[name];
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = 8; c.height = 8;
+  const g = c.getContext('2d');
+  for (const [color, rows] of ICONS[name]) {
+    g.fillStyle = color;
+    rows.forEach((r, y) => { for (let x = 0; x < r.length; x++) if (r[x] === '#') g.fillRect(x, y, 1, 1); });
+  }
+  iconCache[name] = c;
   return c;
 }
 
@@ -229,8 +296,11 @@ const SFX = {
   playerHit()  { Snd.noise(0.5, 0.4, 700); Snd.tone(160, 0.5, 'sawtooth', 0.2, 40); },
   march(i)     { Snd.tone([196, 185, 175, 165][i % 4], 0.07, 'square', 0.14); },
   strike()     { for (let i = 0; i < 4; i++) Snd.tone(i % 2 ? 2300 : 1900, 0.11, 'sine', 0.18, 0, i * 0.12); },
-  violation()  { Snd.tone(110, 0.35, 'sawtooth', 0.22); Snd.tone(117, 0.35, 'sawtooth', 0.22); },
+  tick()       { Snd.tone(1320, 0.05, 'square', 0.06); },
+  click()      { Snd.tone(660, 0.05, 'square', 0.08, 990); },
   rage()       { Snd.tone(70, 0.7, 'sawtooth', 0.3, 180); Snd.noise(0.6, 0.2, 400); },
+  meh()        { Snd.tone(392, 0.22, 'triangle', 0.2, 370); Snd.tone(330, 0.4, 'triangle', 0.2, 290, 0.24); },
+  reserves()   { Snd.noise(0.9, 0.18, 500); Snd.tone(140, 0.9, 'sawtooth', 0.12, 420); },
   negotiate()  { [523, 659, 784, 1046].forEach((f, i) => Snd.tone(f, 0.14, 'triangle', 0.2, 0, i * 0.09)); },
   waveClear()  { [392, 523, 659, 784, 1046].forEach((f, i) => Snd.tone(f, 0.16, 'square', 0.1, 0, i * 0.08)); },
   victory()    { [523, 523, 523, 698, 880, 784, 1046].forEach((f, i) => Snd.tone(f, i === 6 ? 0.6 : 0.16, 'square', 0.12, 0, i * 0.14)); },
@@ -261,6 +331,18 @@ function wrap(str, maxW, size) {
   return lines;
 }
 
+// Like wrap, but narrows the width while the line count holds, so the last line isn't a lone word
+function balancedWrap(str, maxW, size) {
+  let lines = wrap(str, maxW, size);
+  if (lines.length < 2) return lines;
+  for (let w = maxW - 6; w > maxW / 2; w -= 6) {
+    const next = wrap(str, w, size);
+    if (next.length > lines.length) break;
+    lines = next;
+  }
+  return lines;
+}
+
 function rr(x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -278,6 +360,13 @@ function text(str, x, y, size, color, align = 'center', base = 'middle') {
   ctx.fillText(str, x, y);
 }
 
+// Left-aligned text that shrinks (down to 9px) to fit maxW
+function fitText(str, x, y, maxW, size, color) {
+  ctx.font = font(size);
+  while (size > 9 && ctx.measureText(str).width > maxW) ctx.font = font(--size);
+  text(str, x, y, size, color, 'left');
+}
+
 function makeSign(slogan) {
   const lines = wrap(slogan, 56, SIGN_FS);
   ctx.font = font(SIGN_FS);
@@ -285,6 +374,12 @@ function makeSign(slogan) {
   for (const l of lines) mw = Math.max(mw, ctx.measureText(l).width);
   return { lines, w: Math.min(64, Math.ceil(mw) + 8), h: lines.length * 9 + 6 };
 }
+
+const cardRect = (i) => ({ x: MENU.x + 10, y: MENU.y + 50 + i * (CARD_H + CARD_GAP), w: MENU.w - 20, h: CARD_H });
+function cardAt(p) { for (let i = 0; i < 3; i++) if (inRect(p, cardRect(i))) return i; return -1; }
+// Benefits cost a share of the current score, rounded to 10
+const offerCost = (tier) => Math.round((game.score * TIERS[tier].cost) / 10) * 10;
+const relColor = (v) => (v >= 80 ? '#5cf2a0' : v >= 50 ? '#ffe14d' : v >= 30 ? '#ffb03c' : '#ff5a5a');
 
 // ---------------------------------------------------------------------------
 // State
@@ -294,9 +389,11 @@ let paused = false;
 let t = 0, endT = 0, deadT = 0, flashT = 0, shakeT = 0, shakeMag = 0;
 let touchUI = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || ('ontouchstart' in window);
 let game, wave, player, pbullets = [], abullets = [], particles = [], popups = [];
+let bestScore = 0;
+try { bestScore = Number(localStorage.getItem('siu-best')) || 0; } catch (e) { /* storage unavailable */ }
 
-const input = { left: false, right: false, fireKey: false, fireId: null, moveId: null, lastX: 0, dragDX: 0 };
-function clearInput() { input.left = input.right = input.fireKey = false; input.fireId = input.moveId = null; input.dragDX = 0; }
+const input = { left: false, right: false, fireSpace: false, fireUp: false, fireId: null, moveId: null, lastX: 0, dragDX: 0 };
+function clearInput() { input.left = input.right = input.fireSpace = input.fireUp = false; input.fireId = input.moveId = null; input.dragDX = 0; }
 
 const stars = [];
 for (let i = 0; i < 70; i++) stars.push({ x: Math.random() * W, y: Math.random() * H, s: Math.random() < 0.2 ? 2 : 1, sp: 6 + Math.random() * 18, tw: Math.random() * 6 });
@@ -304,7 +401,13 @@ for (let i = 0; i < 70; i++) stars.push({ x: Math.random() * W, y: Math.random()
 const titleSigns = ['WE WANT DENTAL', 'SOLIDARITY', 'FAIR WAGES FOR INVADERS'].map(makeSign);
 
 function startGame() {
-  game = { score: 0, lives: 3, violations: 0, honored: 0, strikes: 0, wavesCleared: 0, runTime: 0, invaded: false };
+  // one offer per tier for each wave; wave 1 always opens with the pizza slice
+  const tiny = [OFFERS[0][0]].concat(shuffle(OFFERS[0].slice(1)));
+  const small = shuffle(OFFERS[1].slice()), big = shuffle(OFFERS[2].slice());
+  game = {
+    score: 0, lives: 3, strikes: 0, deals: [], lrs: LRS_START, wavesCleared: 0, runTime: 0,
+    plan: WAVES.map((_, n) => [tiny[n], small[n], big[n]]),
+  };
   player = { x: W / 2, cd: 0, inv: 0, alive: true };
   particles = []; popups = [];
   clearInput();
@@ -317,13 +420,15 @@ function startGame() {
 function startWave(n) {
   const cfg = WAVES[n];
   wave = {
-    n, cfg, aliens: [], total: cfg.cols * cfg.rows, anger: 0,
-    phase: 'work', phaseT: 0, strikeViol: 0, struck: false, threshold: 0,
+    n, cfg, aliens: [], total: cfg.cols * cfg.rows, offers: game.plan[n],
+    phase: 'work', phaseT: 0, struck: false, threshold: 0, mood: 0, reserves: false,
+    lastTick: 0, sel: -1, hover: -1, press: -1, pressId: null, outTime: TWEEN_TIME,
     fx: 0, fy: 96, dir: 1, fireT: 1.6, marchT: 0, marchI: 0, frame: 0,
-    introT: 1.5, clearT: 0, bubbleLines: [], clearMsg: '',
+    introT: 1.5, clearT: 0, bubbleLines: [], receipt: '', receiptInk: '#1a1630', clearMsg: '',
   };
   // strike triggers when 40-60% of this wave's aliens remain
-  wave.threshold = Math.round(wave.total * (0.4 + Math.random() * 0.2));
+  const lo = Math.ceil(wave.total * 0.4), hi = Math.floor(wave.total * 0.6);
+  wave.threshold = lo + Math.floor(Math.random() * (hi - lo + 1));
   wave.fx = (W - ((cfg.cols - 1) * CW + 24)) / 2;
   for (let r = 0; r < cfg.rows; r++) {
     const type = r === 0 ? 'a1' : r < cfg.rows - 1 ? 'a2' : 'a3';
@@ -344,11 +449,12 @@ function layoutGrid() {
 }
 
 const aliveAliens = () => wave.aliens.filter((a) => a.alive);
-const isStriking = () => wave.phase === 'strike_in' || wave.phase === 'picket' || wave.phase === 'negotiate';
+const isStriking = () => wave.phase === 'strike_in' || wave.phase === 'menu' || wave.phase === 'react' || wave.phase === 'strike_out';
 
 function startStrike() {
   const w = wave;
-  w.struck = true; w.phase = 'strike_in'; w.phaseT = 0; w.strikeViol = 0;
+  w.struck = true; w.phase = 'strike_in'; w.phaseT = 0;
+  w.lastTick = 0; w.sel = -1; w.hover = -1; w.press = -1; w.pressId = null;
   game.strikes++;
   const alive = aliveAliens().sort((a, b) => a.row - b.row || a.col - b.col);
   const n = alive.length, perRow = 5;
@@ -358,27 +464,75 @@ function startStrike() {
     const inRow = Math.min(perRow, n - r * perRow);
     const k = i - r * perRow;
     a.px = W / 2 + (k - (inRow - 1) / 2) * 68 - 12;
-    a.py = 190 + r * 70;
+    a.py = 196 + r * 70;
     a.fromX = a.x; a.fromY = a.y;
     a.sign = makeSign(slogans[i % slogans.length]);
   });
-  // clear everything in flight so a shot fired just before the strike isn't a violation
+  // nothing stays in flight: no shooting while they're on strike
   abullets.forEach((b) => (b.dead = true));
   pbullets.forEach((b) => (b.dead = true));
-  player.cd = 0.5;
   popup(W / 2, 300, 'STRIKE!', '#ffe14d', 30, 1.4);
   SFX.strike();
 }
 
-function endStrike(rage) {
+function chooseOffer(tier, timedOut) {
   const w = wave;
-  if (!rage && w.strikeViol === 0) {
-    game.honored++;
-    popup(W / 2, 300, 'FAIR DEAL!', '#5cf2a0', 22, 1.3);
+  if (w.phase !== 'menu') return;
+  const T = TIERS[tier], cost = offerCost(tier);
+  game.score -= cost;
+  game.lrs = clamp(game.lrs + T.lrs, 0, 100);
+  game.deals.push(tier);
+  w.mood = 2 - tier;
+  w.reserves = tier === 0;
+  w.phase = 'react'; w.phaseT = 0;
+  w.press = -1; w.pressId = null; w.hover = -1;
+  cvs.style.cursor = '';
+  w.bubbleLines = balancedWrap(timedOut ? TIMEOUT_REPLY : w.offers[tier].reply, 268, 12);
+  w.receipt = (cost ? 'PAID ' + cost + ' PTS' : 'COST: NOTHING') + ' · RELATIONS ' + (T.lrs > 0 ? '+' : '') + T.lrs;
+  w.receiptInk = T.ink;
+  if (tier === 0) {
+    popup(W / 2, 300, timedOut ? 'NO DEAL!' : 'INSULTED!', T.color, 26, 1.5);
+    SFX.rage(); shake(0.5, 6); flashT = 0.35;
+  } else if (tier === 1) {
+    popup(W / 2, 300, 'GRUMBLING...', T.color, 22, 1.4);
+    SFX.meh();
+  } else {
+    popup(W / 2, 300, 'FAIR DEAL!', T.color, 24, 1.4);
+    SFX.negotiate();
   }
-  w.phase = 'strike_out'; w.phaseT = 0;
+}
+
+function endStrike() {
+  const w = wave;
+  w.phase = 'strike_out'; w.phaseT = 0; w.outTime = TWEEN_TIME;
   layoutGrid();
   for (const a of aliveAliens()) { a.fromX = a.x; a.fromY = a.y; }
+  if (!w.reserves) return;
+  // insulted: reinforcements fly in from above and take empty slots (never ones close to the ground)
+  const open = w.aliens.filter((a) => !a.alive && a.gy + 16 < PLAYER_Y - 110);
+  const joiners = shuffle(open).slice(0, w.cfg.reserves);
+  for (const a of joiners) {
+    a.alive = true; a.sign = null;
+    a.fromX = a.x = clamp(a.gx + (Math.random() - 0.5) * 120, 0, W - 24);
+    a.fromY = a.y = -24 - Math.random() * 70;
+  }
+  if (joiners.length) {
+    // an emptied edge column can drift past the screen edge; slide the refilled formation back on screen
+    let mn = Infinity, mx = -Infinity;
+    for (const a of aliveAliens()) { mn = Math.min(mn, a.gx); mx = Math.max(mx, a.gx + 24); }
+    if (mn < 8) w.fx += 8 - mn;
+    else if (mx > W - 8) w.fx -= mx - (W - 8);
+    layoutGrid();
+    w.outTime = RESERVES_TIME;
+    popup(W / 2, 330, '+' + joiners.length + ' MORE ALIENS!', '#ff3b3b', 20, 1.6);
+    SFX.reserves();
+  }
+}
+
+function pickCard(i) {
+  if (wave.phase !== 'menu' || wave.phaseT < MENU_GRACE) return;
+  SFX.click();
+  chooseOffer(i, false);
 }
 
 function wiggle(a, amt) {
@@ -411,7 +565,8 @@ function updatePlay(dt) {
   const w = wave;
   game.runTime += dt;
 
-  if (player.alive) {
+  // the offer menu covers the ship, so it stays put until a deal is made
+  if (player.alive && w.phase !== 'menu') {
     const mv = (input.left ? -1 : 0) + (input.right ? 1 : 0);
     player.x = clamp(player.x + mv * 240 * dt + input.dragDX * 1.6, 16, W - 16);
   }
@@ -419,8 +574,9 @@ function updatePlay(dt) {
   if (player.inv > 0) player.inv -= dt;
   player.cd -= dt;
 
-  const wantFire = input.fireKey || input.fireId !== null;
-  if (wantFire && player.alive && player.cd <= 0 && w.introT <= 0 && w.phase !== 'clear' && pbullets.length < 3) {
+  const wantFire = input.fireSpace || input.fireUp || input.fireId !== null;
+  const canFire = w.phase === 'work' && w.introT <= 0;   // no shooting while they're on strike
+  if (wantFire && canFire && player.alive && player.cd <= 0 && pbullets.length < 3) {
     pbullets.push({ x: player.x, y: PLAYER_Y - 6, dead: false });
     player.cd = 0.22;
     SFX.shoot();
@@ -456,8 +612,9 @@ function updateAliens(dt) {
   if (!alive.length) return;
 
   if (w.phase === 'work') {
+    const m = MOODS[w.mood];
     const killedFrac = 1 - alive.length / w.total;
-    const spd = w.cfg.speed * (1 + 1.8 * killedFrac) * (1 + 0.35 * w.anger);
+    const spd = w.cfg.speed * (1 + 1.8 * killedFrac) * m.move;
     w.fx += w.dir * spd * dt;
     layoutGrid();
     let minX = Infinity, maxX = -Infinity;
@@ -477,14 +634,14 @@ function updateAliens(dt) {
     w.fireT -= dt;
     if (w.fireT <= 0 && player.alive) {
       alienFire(alive);
-      w.fireT = (w.cfg.fire / (1 + 0.3 * w.anger)) * (0.6 + Math.random() * 0.8);
+      w.fireT = (w.cfg.fire / m.fire) * (0.6 + Math.random() * 0.8);
     }
 
     if (maxY >= PLAYER_Y - 2 && state === 'play') invaded();
     return;
   }
 
-  // Strike choreography
+  // Strike choreography: strike_in -> menu -> react -> strike_out -> work
   w.phaseT += dt;
   w.frame = Math.floor(t * 4) % 2;
   if (w.phase === 'strike_in') {
@@ -494,25 +651,24 @@ function updateAliens(dt) {
       a.x = lerp(a.fromX, a.px, k) + wg.dx;
       a.y = lerp(a.fromY, a.py, k) + wg.dy;
     }
-    if (w.phaseT >= TWEEN_TIME) { w.phase = 'picket'; w.phaseT = 0; }
-  } else if (w.phase === 'picket' || w.phase === 'negotiate') {
-    const amt = w.phase === 'picket' ? 1 : 0.4;
+    if (w.phaseT >= TWEEN_TIME) { w.phase = 'menu'; w.phaseT = 0; }
+  } else if (w.phase === 'menu' || w.phase === 'react') {
+    const amt = w.phase === 'menu' ? 1 : 0.4;
     for (const a of alive) {
       const wg = wiggle(a, amt);
       a.x = a.px + wg.dx; a.y = a.py + wg.dy;
     }
-    if (w.phase === 'picket' && w.phaseT >= PICKET_TIME) {
-      w.phase = 'negotiate'; w.phaseT = 0;
-      const msg = w.strikeViol > 0 ? pick(GRUDGES) : pick(DEALS);
-      w.bubbleLines = wrap(msg, 268, 12);
-      SFX.negotiate();
-    } else if (w.phase === 'negotiate' && w.phaseT >= NEGOTIATE_TIME) {
-      endStrike(false);
+    if (w.phase === 'menu') {
+      const sec = Math.ceil(MENU_TIME - w.phaseT);
+      if (sec <= 3 && sec > 0 && sec !== w.lastTick) { w.lastTick = sec; SFX.tick(); }
+      if (w.phaseT >= MENU_TIME) chooseOffer(0, true);
+    } else if (w.phaseT >= REACT_TIME) {
+      endStrike();
     }
   } else if (w.phase === 'strike_out') {
-    const k = ease(Math.min(1, w.phaseT / TWEEN_TIME));
+    const k = ease(Math.min(1, w.phaseT / w.outTime));
     for (const a of alive) { a.x = lerp(a.fromX, a.gx, k); a.y = lerp(a.fromY, a.gy, k); }
-    if (w.phaseT >= TWEEN_TIME) { w.phase = 'work'; w.phaseT = 0; w.fireT = 0.9; }
+    if (w.phaseT >= w.outTime) { w.phase = 'work'; w.phaseT = 0; w.fireT = 0.9; }
   }
 }
 
@@ -524,7 +680,7 @@ function alienFire(alive) {
   if (Math.random() < 0.45) {
     s = shooters.reduce((best, a) => (Math.abs(a.x + 12 - player.x) < Math.abs(best.x + 12 - player.x) ? a : best));
   } else s = pick(shooters);
-  abullets.push({ x: s.x + 12, y: s.y + 16, vy: wave.cfg.bullet * (1 + 0.12 * wave.anger), dead: false });
+  abullets.push({ x: s.x + 12, y: s.y + 16, vy: wave.cfg.bullet * MOODS[wave.mood].bullet, dead: false });
   SFX.alienShoot();
 }
 
@@ -566,33 +722,19 @@ function hitAlien(a) {
   const w = wave;
   a.alive = false;
   const cx = a.x + 12, cy = a.y + 8;
-  const color = w.anger > 0 ? ANGRY[Math.min(w.anger, 3) - 1] : COLORS[a.type];
-  burst(cx, cy, color, 16);
-
-  if (isStriking()) {
-    game.violations++; w.strikeViol++; w.anger++;
-    popup(cx, cy - 26, 'UNION VIOLATION!', '#ff4d4d', 12, 1.1);
-    flashT = 0.35; shake(0.3, 4);
-    SFX.violation();
-    if (a.sign) burst(cx, cy - 30, '#f4ecd8', 10);
-  } else {
-    game.score += a.pts;
-    popup(cx, cy, '+' + a.pts, '#ffffff', 10, 0.7);
-    SFX.alienDie();
-  }
+  burst(cx, cy, MOODS[w.mood].color || COLORS[a.type], 16);
+  game.score += a.pts;
+  popup(cx, cy, '+' + a.pts, '#ffffff', 10, 0.7);
+  SFX.alienDie();
 
   const n = aliveAliens().length;
   if (n === 0) {
     w.phase = 'clear'; w.clearT = 1.6;
     game.wavesCleared++;
-    w.clearMsg = w.anger > 0 ? 'HR IS "CONCERNED"' : 'NICE WORK, BOSS';
+    w.clearMsg = ['NICE WORK, BOSS', 'HR IS "CONCERNED"', 'THEY WILL REMEMBER THIS'][w.mood];
     abullets.forEach((b) => (b.dead = true));
     SFX.waveClear();
-  } else if (isStriking() && w.strikeViol >= 3) {
-    popup(W / 2, 300, 'WILDCAT RAGE!', '#ff2e2e', 24, 1.5);
-    SFX.rage(); shake(0.6, 7);
-    endStrike(true);
-  } else if (!w.struck && w.phase === 'work' && n <= w.threshold) {
+  } else if (!w.struck && w.phase === 'work' && state === 'play' && n <= w.threshold) {
     startStrike();
   }
 }
@@ -604,6 +746,7 @@ function playerHit() {
   if (game.lives <= 0) {
     player.alive = false;
     state = 'dying'; deadT = 1.6;
+    pbullets.forEach((b) => (b.dead = true)); // shots still in flight can't change the wave after the ship is gone
   } else {
     player.inv = 1.8;
     abullets.forEach((b) => (b.dead = true));
@@ -611,18 +754,19 @@ function playerHit() {
 }
 
 function invaded() {
-  game.lives = 0; game.invaded = true;
+  game.lives = 0;
   player.alive = false;
   burst(player.x, PLAYER_Y + 8, '#ffe14d', 40);
   popup(W / 2, 300, 'INVADED!', '#ff2e2e', 28, 1.5);
   SFX.playerHit(); shake(0.6, 8);
   state = 'dying'; deadT = 1.6;
+  pbullets.forEach((b) => (b.dead = true));
 }
 
 function endGame(victory) {
   state = victory ? 'victory' : 'gameover';
   endT = 0; clearInput();
-  const lrs = clamp(60 + game.honored * 15 - game.violations * 10, 0, 100);
+  const lrs = game.lrs;
   let grade, title, remark;
   if (lrs >= 95)      { grade = 'A+'; title = 'BELOVED OVERLORD';  remark = 'The aliens named a break room after you.'; }
   else if (lrs >= 80) { grade = 'A';  title = 'FAIR EMPLOYER';     remark = 'Glassdoor rating: 4.8 tentacles.'; }
@@ -630,10 +774,15 @@ function endGame(victory) {
   else if (lrs >= 50) { grade = 'C';  title = 'MIDDLE MANAGEMENT'; remark = game.strikes ? 'Mixed feedback in the exit interviews.' : 'No strikes witnessed. HR is suspicious.'; }
   else if (lrs >= 30) { grade = 'D';  title = 'UNION BUSTER';      remark = 'The aliens have hired a lawyer.'; }
   else                { grade = 'F';  title = 'GALACTIC LABOR CRIMINAL'; remark = 'You are now a cautionary tale in 40 galaxies.'; }
+  game.newBest = game.score > bestScore;
+  if (game.newBest) {
+    bestScore = game.score;
+    try { localStorage.setItem('siu-best', String(bestScore)); } catch (e) { /* storage unavailable */ }
+  }
   game.end = {
     lrs, grade, title,
-    remarkLines: wrap(remark, 300, 11),
-    msgLines: wrap(victory ? pick(WIN_MSGS) : pick(LOSE_MSGS), 300, 14),
+    remarkLines: balancedWrap(remark, 270, 11),
+    msgLines: balancedWrap(victory ? pick(WIN_MSGS) : pick(LOSE_MSGS), 300, 14),
   };
   if (victory) SFX.victory(); else SFX.gameOver();
 }
@@ -710,6 +859,10 @@ function drawShip(x, y, scale = 2, color = '#ffe14d') {
   ctx.drawImage(spr, Math.round(x - (spr.width * scale) / 2), Math.round(y), spr.width * scale, spr.height * scale);
 }
 
+function drawIcon(name, x, y, scale) {
+  ctx.drawImage(iconCanvas(name), Math.round(x), Math.round(y), 8 * scale, 8 * scale);
+}
+
 function drawTitle() {
   text('SPACE INVADERS', W / 2, 120, 30, '#ffffff');
   ctx.save();
@@ -732,8 +885,8 @@ function drawTitle() {
 
   text('Halfway through each wave,', W / 2, 390, 13, '#d8d4ff');
   text('the aliens go on STRIKE.', W / 2, 408, 13, '#ffe14d');
-  text('Shoot strikers = UNION VIOLATION.', W / 2, 432, 12, '#ff8080');
-  text('Wait it out and they negotiate.', W / 2, 450, 12, '#5cf2a0');
+  text('Offer pizza and they riot.', W / 2, 432, 12, '#ff8080');
+  text('Real benefits cost points.', W / 2, 450, 12, '#5cf2a0');
 
   if (touchUI) {
     text('DRAG bottom of screen to move', W / 2, 488, 12, '#9d97c9');
@@ -749,26 +902,26 @@ function drawTitle() {
 function drawGame() {
   const w = wave;
   const striking = isStriking();
-  const angryCol = w.anger > 0 ? ANGRY[Math.min(w.anger, 3) - 1] : null;
+  const moodCol = MOODS[w.mood].color;
 
-  // signs (behind aliens), fading in/out with the tween
-  if (w.phase !== 'work' && w.phase !== 'clear') {
+  // signs (behind aliens), fading in/out with the walk to the picket line
+  if (striking) {
     let alpha = 1;
     if (w.phase === 'strike_in') alpha = Math.min(1, w.phaseT / TWEEN_TIME);
     if (w.phase === 'strike_out') alpha = 1 - Math.min(1, w.phaseT / TWEEN_TIME);
-    const amt = w.phase === 'picket' ? 1 : w.phase === 'negotiate' ? 0.4 : alpha;
+    const amt = w.phase === 'menu' ? 1 : w.phase === 'react' ? 0.4 : alpha;
     for (const a of w.aliens) {
       if (a.alive && a.sign) drawSign(a.sign, a.x + 12, a.y, wiggle(a, amt).rot, alpha);
     }
   }
   for (const a of w.aliens) {
-    if (a.alive) drawAlienSprite(a.type, w.frame, angryCol || COLORS[a.type], a.x, a.y);
+    if (a.alive) drawAlienSprite(a.type, w.frame, moodCol || COLORS[a.type], a.x, a.y);
   }
 
   // bullets
   ctx.fillStyle = '#ffffff';
   for (const b of pbullets) ctx.fillRect(b.x - 1, b.y, 2, 10);
-  ctx.fillStyle = angryCol || '#ff5e7a';
+  ctx.fillStyle = moodCol || '#ff5e7a';
   const zig = Math.floor(t * 16) % 2;
   for (const b of abullets) {
     ctx.fillRect(b.x - 1 + (zig ? -1 : 1), b.y, 2, 3);
@@ -792,14 +945,10 @@ function drawGame() {
 
   drawHUD();
 
-  // strike banner + negotiation
-  if (w.phase === 'strike_in' || w.phase === 'picket') {
-    if (Math.floor(t * 3) % 2 === 0 || w.phase === 'picket') text('★ ON STRIKE · HOLD YOUR FIRE ★', W / 2, 60, 12, '#ffe14d');
-    const k = w.phase === 'picket' ? w.phaseT / PICKET_TIME : 0;
-    ctx.fillStyle = '#2b2752'; ctx.fillRect(60, 71, 240, 5);
-    ctx.fillStyle = '#5cf2a0'; ctx.fillRect(60, 71, 240 * k, 5);
-    text('NEGOTIATIONS', W / 2, 85, 9, '#9d97c9');
-  } else if (w.phase === 'negotiate') {
+  // strike banner, then the union rep's reply
+  if (w.phase === 'strike_in' || w.phase === 'menu') {
+    if (w.phase === 'menu' || Math.floor(t * 3) % 2 === 0) text('★ ON STRIKE · MAKE AN OFFER ★', W / 2, 60, 12, '#ffe14d');
+  } else if (w.phase === 'react') {
     drawBubble();
   }
 
@@ -827,12 +976,13 @@ function drawGame() {
     text(w.clearMsg, W / 2, 330, 13, '#d8d4ff');
   }
 
-  if (touchUI && (state === 'play' || state === 'dying')) drawTouchControls(striking);
+  if (w.phase === 'menu') { if (state === 'play') drawMenu(); }
+  else if (touchUI && (state === 'play' || state === 'dying')) drawTouchControls(striking);
 }
 
 function drawBubble() {
-  const lines = wave.bubbleLines;
-  const bw = 296, bh = (lines.length + 1) * 14 + 12, bx = (W - bw) / 2, by = 66;
+  const w = wave, lines = w.bubbleLines;
+  const bw = 296, bx = (W - bw) / 2, by = 54, bh = 27 + lines.length * 14 + 16;
   ctx.fillStyle = '#ffffff';
   rr(bx, by, bw, bh, 8); ctx.fill();
   ctx.beginPath();
@@ -840,13 +990,61 @@ function drawBubble() {
   ctx.fill();
   text('UNION REP:', W / 2, by + 13, 11, '#c0262d');
   lines.forEach((l, i) => text(l, W / 2, by + 27 + i * 14, 12, '#1a1630'));
+  text(w.receipt, W / 2, by + 27 + lines.length * 14 + 3, 10, w.receiptInk);
+}
+
+function drawMenu() {
+  const w = wave;
+  const appear = Math.min(1, w.phaseT / 0.3);
+  const ready = w.phaseT >= MENU_GRACE;
+  const left = Math.max(0, MENU_TIME - w.phaseT);
+  ctx.save();
+  ctx.globalAlpha = appear;
+  ctx.translate(0, (1 - ease(appear)) * 40);
+
+  rr(MENU.x, MENU.y, MENU.w, MENU.h, 14);
+  ctx.fillStyle = '#0e0c22'; ctx.fill();
+  ctx.strokeStyle = '#3d3878'; ctx.lineWidth = 2; ctx.stroke();
+  text('MAKE AN OFFER', W / 2, MENU.y + 20, 16, '#ffe14d');
+  text(Math.ceil(left) + 's', MENU.x + MENU.w - 16, MENU.y + 20, 12, left <= 3 ? '#ff5a5a' : '#9d97c9', 'right');
+  const k = left / MENU_TIME, barW = MENU.w - 32;
+  ctx.fillStyle = '#2b2752'; ctx.fillRect(MENU.x + 16, MENU.y + 36, barW, 5);
+  ctx.fillStyle = k > 0.5 ? '#5cf2a0' : k > 0.25 ? '#ffb03c' : '#ff5a5a';
+  ctx.fillRect(MENU.x + 16, MENU.y + 36, barW * k, 5);
+
+  if (!ready) ctx.globalAlpha = appear * 0.55;
+  for (let i = 0; i < 3; i++) drawCard(i, ready);
+  ctx.globalAlpha = appear;
+  text(touchUI ? 'TAP AN OFFER' : 'CLICK AN OFFER OR PRESS 1 · 2 · 3', W / 2, MENU.y + MENU.h - 10, 9, '#9d97c9');
+  ctx.restore();
+}
+
+function drawCard(i, ready) {
+  const w = wave, r = cardRect(i), T = TIERS[i], o = w.offers[i];
+  const hot = ready && (w.sel === i || w.hover === i || w.press === i);
+  const midY = r.y + r.h / 2;
+  rr(r.x, r.y, r.w, r.h, 10);
+  ctx.fillStyle = hot ? '#2a2452' : '#17142f'; ctx.fill();
+  ctx.strokeStyle = T.color; ctx.lineWidth = hot ? 3 : 1.5; ctx.stroke();
+
+  rr(r.x + 8, midY - 10, 20, 20, 5);
+  ctx.fillStyle = T.color; ctx.fill();
+  text(String(i + 1), r.x + 18, midY + 1, 12, '#07060f');
+  drawIcon(o.icon, r.x + 36, midY - 12, 3);
+
+  fitText(o.name, r.x + 70, r.y + 22, r.w - 70 - 72, 12, '#ffffff');
+  text(T.mood + ' · ' + T.hint, r.x + 70, r.y + 42, 9, T.color, 'left');
+
+  const cost = offerCost(i);
+  text(cost ? '-' + cost : 'FREE', r.x + r.w - 12, r.y + 23, 15, cost ? '#ffffff' : '#ffe14d', 'right');
+  text(cost ? 'PTS' : 'NO COST', r.x + r.w - 12, r.y + 42, 9, '#9d97c9', 'right');
 }
 
 function drawHUD() {
   text('SCORE ' + String(game.score).padStart(5, '0'), 10, 20, 13, '#ffffff', 'left');
   text('WAVE ' + (wave.n + 1) + '/' + WAVES.length, 188, 20, 13, '#d8d4ff');
   for (let i = 0; i < game.lives; i++) drawShip(18 + i * 18, 34, 1);
-  text('UNION VIOLATIONS: ' + game.violations, W - 10, 40, 11, game.violations ? '#ff4d4d' : '#9d97c9', 'right');
+  text('RELATIONS ' + game.lrs, W - 10, 40, 11, relColor(game.lrs), 'right');
 
   // mute button
   ctx.fillStyle = 'rgba(255,255,255,0.12)';
@@ -883,15 +1081,15 @@ function drawTouchControls(striking) {
   ctx.globalAlpha = 1;
   text('◀  DRAG TO MOVE  ▶', 136, 599, 12, 'rgba(216,212,255,0.6)');
 
-  // fire button
+  // fire button (locked while they're on strike)
   const pressed = input.fireId !== null;
-  ctx.globalAlpha = pressed ? 0.85 : 0.55;
-  ctx.fillStyle = striking ? '#c08a1a' : '#c0262d';
+  ctx.globalAlpha = striking ? 0.4 : pressed ? 0.85 : 0.55;
+  ctx.fillStyle = striking ? '#5a5470' : '#c0262d';
   ctx.beginPath(); ctx.arc(FIRE_BTN.x, FIRE_BTN.y, FIRE_BTN.r, 0, Math.PI * 2); ctx.fill();
   ctx.globalAlpha = 1;
   ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(FIRE_BTN.x, FIRE_BTN.y, FIRE_BTN.r - 3, 0, Math.PI * 2); ctx.stroke();
-  text(striking ? 'FIRE?' : 'FIRE', FIRE_BTN.x, FIRE_BTN.y + 1, 15, '#ffffff');
+  text(striking ? 'WAIT' : 'FIRE', FIRE_BTN.x, FIRE_BTN.y + 1, 15, striking ? '#9d97c9' : '#ffffff');
 }
 
 function drawEnd() {
@@ -910,16 +1108,18 @@ function drawEnd() {
   text(e.grade + ' · ' + e.title, W / 2, 310, e.title.length > 18 ? 13 : 16, '#ffffff');
   e.remarkLines.forEach((l, i) => text(l, W / 2, 340 + i * 15, 11, '#d8d4ff'));
 
+  const count = (tier) => game.deals.filter((d) => d === tier).length;
   const rows = [
-    ['SCORE', String(game.score)],
-    ['SHIFTS COMPLETED', game.wavesCleared + '/' + WAVES.length],
-    ['STRIKES HONORED', game.honored + '/' + game.strikes],
-    ['UNION VIOLATIONS', String(game.violations)],
-    ['SHIFT LENGTH', Math.round(game.runTime) + 's'],
+    ['SCORE', String(game.score), '#ffffff'],
+    ['BEST', (game.newBest ? 'NEW! ' : '') + bestScore, game.newBest ? '#ffe14d' : '#ffffff'],
+    ['SHIFTS COMPLETED', game.wavesCleared + '/' + WAVES.length, '#ffffff'],
+    ['FAIR DEALS', count(2) + '/' + game.strikes, '#ffffff'],
+    ['INSULTING OFFERS', String(count(0)), count(0) ? '#ff5a5a' : '#ffffff'],
+    ['SHIFT LENGTH', Math.round(game.runTime) + 's', '#ffffff'],
   ];
-  rows.forEach(([k, v], i) => {
-    text(k, 52, 410 + i * 22, 12, '#9d97c9', 'left');
-    text(v, W - 52, 410 + i * 22, 12, k === 'UNION VIOLATIONS' && game.violations ? '#ff4d4d' : '#ffffff', 'right');
+  rows.forEach(([k, v, c], i) => {
+    text(k, 52, 404 + i * 22, 12, '#9d97c9', 'left');
+    text(v, W - 52, 404 + i * 22, 12, c, 'right');
   });
 
   const ready = endT > 0.8;
@@ -941,8 +1141,15 @@ function drawPaused() {
 // ---------------------------------------------------------------------------
 // Input
 // ---------------------------------------------------------------------------
+const menuOpen = () => state === 'play' && !paused && wave && wave.phase === 'menu';
+
 function pause() {
-  if ((state === 'play' || state === 'dying') && !paused) { paused = true; clearInput(); Snd.suspend(); }
+  if ((state === 'play' || state === 'dying') && !paused) {
+    paused = true; Snd.suspend();
+    // held keys survive a P/Esc/button pause (their keyups still arrive); touches and clicks are released
+    input.fireId = input.moveId = null; input.dragDX = 0;
+    wave.press = -1; wave.pressId = null;
+  }
 }
 function resume() { if (paused) { paused = false; Snd.resume(); } }
 function togglePause() { if (paused) resume(); else pause(); }
@@ -963,6 +1170,13 @@ function onPointerDown(e) {
   if (dist(p, MUTE_BTN) < 20) { Snd.setMuted(!Snd.muted); return; }
   if (paused) { resume(); return; }
 
+  // while the offer menu is up, touches only pick cards (released on the same card)
+  if (menuOpen()) {
+    const i = cardAt(p);
+    if (i >= 0 && wave.phaseT >= MENU_GRACE) { wave.press = i; wave.pressId = e.pointerId; }
+    return;
+  }
+
   if (touchUI && input.fireId === null && dist(p, FIRE_BTN) < FIRE_BTN.r + 14) { input.fireId = e.pointerId; return; }
   if (input.moveId === null && (p.y > ZONE_Y || e.clientY > window.innerHeight * 2 / 3)) {
     input.moveId = e.pointerId; input.lastX = p.x; return;
@@ -970,6 +1184,11 @@ function onPointerDown(e) {
   if (e.pointerType === 'mouse' && input.fireId === null) input.fireId = e.pointerId; // desktop: click above to fire
 }
 function onPointerMove(e) {
+  if (menuOpen() && e.pointerType === 'mouse') {
+    wave.hover = cardAt(toGame(e.clientX, e.clientY));
+    if (wave.hover >= 0) wave.sel = -1; // one highlight at a time
+    cvs.style.cursor = wave.hover >= 0 ? 'pointer' : '';
+  }
   if (e.pointerId === input.moveId) {
     e.preventDefault();
     const p = toGame(e.clientX, e.clientY);
@@ -979,6 +1198,17 @@ function onPointerMove(e) {
 }
 function onPointerUp(e) {
   Snd.init();
+  if (menuOpen() && e.pointerId === wave.pressId) {
+    const i = cardAt(toGame(e.clientX, e.clientY));
+    const pressed = wave.press;
+    wave.press = -1; wave.pressId = null;
+    if (i === pressed) pickCard(i);
+  }
+  if (e.pointerId === input.moveId) input.moveId = null;
+  if (e.pointerId === input.fireId) input.fireId = null;
+}
+function onPointerCancel(e) {
+  if (wave && e.pointerId === wave.pressId) { wave.press = -1; wave.pressId = null; }
   if (e.pointerId === input.moveId) input.moveId = null;
   if (e.pointerId === input.fireId) input.fireId = null;
 }
@@ -986,7 +1216,7 @@ function onPointerUp(e) {
 window.addEventListener('pointerdown', onPointerDown, { passive: false });
 window.addEventListener('pointermove', onPointerMove, { passive: false });
 window.addEventListener('pointerup', onPointerUp);
-window.addEventListener('pointercancel', onPointerUp);
+window.addEventListener('pointercancel', onPointerCancel);
 
 // Block scrolling, pinch zoom, double-tap zoom, long-press menus
 const block = (e) => e.preventDefault();
@@ -997,31 +1227,48 @@ document.addEventListener('gesturestart', block, { passive: false });
 document.addEventListener('dblclick', block, { passive: false });
 document.addEventListener('contextmenu', block);
 
+// Offer menu keys: 1/2/3 pick directly, up/down + Enter/Space pick the highlighted card
+function menuKey(k, repeat) {
+  const w = wave;
+  if (repeat || w.phaseT < MENU_GRACE) return;
+  if (k === '1' || k === '2' || k === '3') { pickCard(Number(k) - 1); return; }
+  // arrows move on from whichever card is lit (keyboard or mouse), leaving a single highlight
+  const cur = w.sel >= 0 ? w.sel : w.hover;
+  if (k === 'ArrowUp' || k === 'w' || k === 'W') { w.sel = cur <= 0 ? 2 : cur - 1; w.hover = -1; SFX.tick(); }
+  else if (k === 'ArrowDown' || k === 's' || k === 'S') { w.sel = cur < 0 || cur >= 2 ? 0 : cur + 1; w.hover = -1; SFX.tick(); }
+  else if ((k === 'Enter' || k === ' ') && w.sel >= 0) pickCard(w.sel);
+}
+
 window.addEventListener('keydown', (e) => {
   Snd.init();
   const k = e.key;
   if (k === ' ' || k.startsWith('Arrow')) e.preventDefault();
+  if (k === 'm' || k === 'M') { if (!e.repeat) Snd.setMuted(!Snd.muted); return; }
+  if (k === 'p' || k === 'P' || k === 'Escape') { if (!e.repeat) togglePause(); return; }
+  if (menuOpen()) { menuKey(k, e.repeat); return; }
   if (k === 'ArrowLeft' || k === 'a' || k === 'A') input.left = true;
   if (k === 'ArrowRight' || k === 'd' || k === 'D') input.right = true;
-  if (k === 'm' || k === 'M') Snd.setMuted(!Snd.muted);
-  if (k === 'p' || k === 'P' || k === 'Escape') { togglePause(); return; }
   if (k === ' ' || k === 'Enter' || k === 'ArrowUp') {
-    if (e.repeat && state !== 'play') return;
+    // repeats re-arm a held fire key, but only a fresh press starts, restarts or un-pauses
+    if (e.repeat && (state !== 'play' || paused)) return;
     if (state === 'title') startGame();
     else if ((state === 'gameover' || state === 'victory') && endT > 0.8) startGame();
     else if (paused) resume();
-    else if (k !== 'Enter') input.fireKey = true;
+    else if (k === ' ') input.fireSpace = true;
+    else if (k === 'ArrowUp') input.fireUp = true;
   }
 });
 window.addEventListener('keyup', (e) => {
   const k = e.key;
   if (k === 'ArrowLeft' || k === 'a' || k === 'A') input.left = false;
   if (k === 'ArrowRight' || k === 'd' || k === 'D') input.right = false;
-  if (k === ' ' || k === 'ArrowUp') input.fireKey = false;
+  if (k === ' ') input.fireSpace = false;
+  if (k === 'ArrowUp') input.fireUp = false;
 });
 
-document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
-window.addEventListener('blur', pause);
+// losing focus can swallow keyups, so forget every held input before pausing
+document.addEventListener('visibilitychange', () => { if (document.hidden) { clearInput(); pause(); } });
+window.addEventListener('blur', () => { clearInput(); pause(); });
 
 // ---------------------------------------------------------------------------
 // Main loop
