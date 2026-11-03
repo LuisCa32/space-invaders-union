@@ -53,6 +53,7 @@ const MENU_TIME = 7;                    // seconds to make an offer before it co
 const MENU_GRACE = 0.6;                 // cards ignore input at first, so a stray FIRE tap can't pick one
 const REACT_TIME = 2.4;                 // the union rep's reply bubble
 const RESERVES_TIME = 1.2;              // reinforcements flying in after an insulting offer
+const GENERAL_TIME = 1.6;               // the bigger fly-in of a general strike
 const LRS_START = 55;                   // Labor Relations Score before any deal
 const SIGN_FS = 9;
 const FONT = 'ui-monospace, Menlo, Consolas, "Courier New", monospace';
@@ -65,10 +66,12 @@ const AGAIN_BTN = { x: 80, y: 552, w: 200, h: 54 };
 const MENU      = { x: 12, y: 366, w: 336, h: 266 };
 const CARD_H = 60, CARD_GAP = 8;
 
+// reserves: aliens that join after an insulting offer. generalStrike (last wave): the insult instead
+// refills every empty slot and adds this many extra rows under the formation.
 const WAVES = [
   { cols: 5, rows: 3, speed: 22, fire: 1.25, bullet: 150, reserves: 6, name: 'MORNING SHIFT' },
   { cols: 6, rows: 3, speed: 28, fire: 0.95, bullet: 175, reserves: 6, name: 'OVERTIME' },
-  { cols: 6, rows: 4, speed: 34, fire: 0.75, bullet: 195, reserves: 8, name: 'GRAVEYARD SHIFT' },
+  { cols: 6, rows: 4, speed: 34, fire: 0.75, bullet: 195, reserves: 8, generalStrike: 2, name: 'GRAVEYARD SHIFT' },
 ];
 
 const COLORS = { a1: '#ff7ae0', a2: '#5cc8ff', a3: '#5cf2a0' };
@@ -79,6 +82,7 @@ const MOODS = [
   { move: 1,    fire: 1,    bullet: 1,    color: null },       // big benefit: business as usual
   { move: 1,    fire: 1.45, bullet: 1.12, color: '#ffb03c' },  // small benefit: grumbling, shooting faster
   { move: 1.45, fire: 1.85, bullet: 1.22, color: '#ff3b3b' },  // insulting offer: furious, and the reserves join
+  { move: 1.5,  fire: 1.85, bullet: 1.25, volley: 2, color: '#ff2a55' },  // insult in the last wave: general strike, two shots per volley
 ];
 
 // Offer tiers, always shown in this order. cost is a share of the current score.
@@ -432,16 +436,18 @@ function startWave(n) {
   wave.fx = (W - ((cfg.cols - 1) * CW + 24)) / 2;
   for (let r = 0; r < cfg.rows; r++) {
     const type = r === 0 ? 'a1' : r < cfg.rows - 1 ? 'a2' : 'a3';
-    for (let c = 0; c < cfg.cols; c++) {
-      wave.aliens.push({
-        type, col: c, row: r, alive: true, x: 0, y: 0, gx: 0, gy: 0, px: 0, py: 0, fromX: 0, fromY: 0,
-        sw: SPR[type][0][0].length * 2, pts: POINTS[type], seed: Math.random() * 10, sign: null,
-      });
-    }
+    for (let c = 0; c < cfg.cols; c++) wave.aliens.push(makeAlien(type, c, r));
   }
   layoutGrid();
   for (const a of wave.aliens) { a.x = a.gx; a.y = a.gy; }
   pbullets = []; abullets = [];
+}
+
+function makeAlien(type, col, row) {
+  return {
+    type, col, row, alive: true, x: 0, y: 0, gx: 0, gy: 0, px: 0, py: 0, fromX: 0, fromY: 0,
+    sw: SPR[type][0][0].length * 2, pts: POINTS[type], seed: Math.random() * 10, sign: null,
+  };
 }
 
 function layoutGrid() {
@@ -479,15 +485,20 @@ function chooseOffer(tier, timedOut) {
   const w = wave;
   if (w.phase !== 'menu') return;
   const T = TIERS[tier], cost = offerCost(tier);
+  const general = tier === 0 && w.cfg.generalStrike > 0;
   game.score -= cost;
   game.lrs = clamp(game.lrs + T.lrs, 0, 100);
   game.deals.push(tier);
-  w.mood = 2 - tier;
+  w.mood = general ? 3 : 2 - tier;
   w.reserves = tier === 0;
   w.phase = 'react'; w.phaseT = 0;
   w.press = -1; w.pressId = null; w.hover = -1;
   cvs.style.cursor = '';
-  w.bubbleLines = balancedWrap(timedOut ? TIMEOUT_REPLY : w.offers[tier].reply, 268, 12);
+  const reply = timedOut ? TIMEOUT_REPLY : w.offers[tier].reply;
+  // a general strike gets its own rallying line instead of "Call in the reserves!"
+  w.bubbleLines = general
+    ? balancedWrap(reply.replace(' Call in the reserves!', ''), 268, 12).concat('EVERYBODY OUT. GENERAL STRIKE!')
+    : balancedWrap(reply, 268, 12);
   w.receipt = (cost ? 'PAID ' + cost + ' PTS' : 'COST: NOTHING') + ' · RELATIONS ' + (T.lrs > 0 ? '+' : '') + T.lrs;
   w.receiptInk = T.ink;
   if (tier === 0) {
@@ -504,13 +515,28 @@ function chooseOffer(tier, timedOut) {
 
 function endStrike() {
   const w = wave;
+  const general = w.mood === 3;
   w.phase = 'strike_out'; w.phaseT = 0; w.outTime = TWEEN_TIME;
+  if (general) {
+    // general strike: whole new rows join under the formation, which regroups high enough to fit them
+    for (let r = 0; r < w.cfg.generalStrike; r++) {
+      for (let c = 0; c < w.cfg.cols; c++) {
+        const a = makeAlien('a3', c, w.cfg.rows + r);
+        a.alive = false;
+        w.aliens.push(a);
+      }
+    }
+    w.total = w.aliens.length;
+    const lastRow = w.cfg.rows + w.cfg.generalStrike - 1;
+    w.fy = Math.min(w.fy, PLAYER_Y - 110 - 17 - lastRow * CH);
+  }
   layoutGrid();
   for (const a of aliveAliens()) { a.fromX = a.x; a.fromY = a.y; }
   if (!w.reserves) return;
-  // insulted: reinforcements fly in from above and take empty slots (never ones close to the ground)
+  // insulted: reinforcements fly in from above and take empty slots (never ones close to the ground);
+  // in a general strike every empty slot fills
   const open = w.aliens.filter((a) => !a.alive && a.gy + 16 < PLAYER_Y - 110);
-  const joiners = shuffle(open).slice(0, w.cfg.reserves);
+  const joiners = shuffle(open).slice(0, general ? open.length : w.cfg.reserves);
   for (const a of joiners) {
     a.alive = true; a.sign = null;
     a.fromX = a.x = clamp(a.gx + (Math.random() - 0.5) * 120, 0, W - 24);
@@ -523,8 +549,15 @@ function endStrike() {
     if (mn < 8) w.fx += 8 - mn;
     else if (mx > W - 8) w.fx -= mx - (W - 8);
     layoutGrid();
-    w.outTime = RESERVES_TIME;
-    popup(W / 2, 330, '+' + joiners.length + ' MORE ALIENS!', '#ff3b3b', 20, 1.6);
+    if (general) {
+      w.outTime = GENERAL_TIME;
+      popup(W / 2, 300, 'GENERAL STRIKE!', MOODS[3].color, 28, 2);
+      popup(W / 2, 336, '+' + joiners.length + ' MORE ALIENS!', '#ff3b3b', 18, 2);
+      SFX.strike(); shake(0.8, 7); flashT = 0.35;
+    } else {
+      w.outTime = RESERVES_TIME;
+      popup(W / 2, 330, '+' + joiners.length + ' MORE ALIENS!', '#ff3b3b', 20, 1.6);
+    }
     SFX.reserves();
   }
 }
@@ -676,11 +709,16 @@ function alienFire(alive) {
   const cols = {};
   for (const a of alive) if (!cols[a.col] || a.row > cols[a.col].row) cols[a.col] = a;
   const shooters = Object.values(cols);
-  let s;
-  if (Math.random() < 0.45) {
-    s = shooters.reduce((best, a) => (Math.abs(a.x + 12 - player.x) < Math.abs(best.x + 12 - player.x) ? a : best));
-  } else s = pick(shooters);
-  abullets.push({ x: s.x + 12, y: s.y + 16, vy: wave.cfg.bullet * MOODS[wave.mood].bullet, dead: false });
+  const m = MOODS[wave.mood];
+  const volley = Math.min(m.volley || 1, shooters.length);   // a general strike fires from two columns at once
+  for (let i = 0; i < volley; i++) {
+    let s;
+    if (i === 0 && Math.random() < 0.45) {
+      s = shooters.reduce((best, a) => (Math.abs(a.x + 12 - player.x) < Math.abs(best.x + 12 - player.x) ? a : best));
+    } else s = pick(shooters);
+    shooters.splice(shooters.indexOf(s), 1);
+    abullets.push({ x: s.x + 12, y: s.y + 16, vy: wave.cfg.bullet * m.bullet, dead: false });
+  }
   SFX.alienShoot();
 }
 
@@ -731,7 +769,7 @@ function hitAlien(a) {
   if (n === 0) {
     w.phase = 'clear'; w.clearT = 1.6;
     game.wavesCleared++;
-    w.clearMsg = ['NICE WORK, BOSS', 'HR IS "CONCERNED"', 'THEY WILL REMEMBER THIS'][w.mood];
+    w.clearMsg = ['NICE WORK, BOSS', 'HR IS "CONCERNED"', 'THEY WILL REMEMBER THIS', 'YOU SURVIVED A GENERAL STRIKE'][w.mood];
     abullets.forEach((b) => (b.dead = true));
     SFX.waveClear();
   } else if (!w.struck && w.phase === 'work' && state === 'play' && n <= w.threshold) {
@@ -950,6 +988,8 @@ function drawGame() {
     if (w.phase === 'menu' || Math.floor(t * 3) % 2 === 0) text('★ ON STRIKE · MAKE AN OFFER ★', W / 2, 60, 12, '#ffe14d');
   } else if (w.phase === 'react') {
     drawBubble();
+  } else if (w.mood === 3) {
+    text('★ GENERAL STRIKE ★', W / 2, 60, 11, MOODS[3].color);
   }
 
   for (const p of popups) {
@@ -1033,7 +1073,8 @@ function drawCard(i, ready) {
   drawIcon(o.icon, r.x + 36, midY - 12, 3);
 
   fitText(o.name, r.x + 70, r.y + 22, r.w - 70 - 72, 12, '#ffffff');
-  text(T.mood + ' · ' + T.hint, r.x + 70, r.y + 42, 9, T.color, 'left');
+  const hint = i === 0 && w.cfg.generalStrike ? 'GENERAL STRIKE' : T.hint;   // the last wave warns you
+  text(T.mood + ' · ' + hint, r.x + 70, r.y + 42, 9, T.color, 'left');
 
   const cost = offerCost(i);
   text(cost ? '-' + cost : 'FREE', r.x + r.w - 12, r.y + 23, 15, cost ? '#ffffff' : '#ffe14d', 'right');

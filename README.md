@@ -18,6 +18,9 @@ an offer.
 You have 7 seconds to decide, and saying nothing counts as an insult. Cheap offers keep your
 points but make the wave much harder; fair deals cost points but keep the peace.
 
+In the last wave, an insult sets off a **general strike**: the formation grows to 36 aliens
+that shoot two at a time. Survive it and you'll have a huge score.
+
 Clear all three waves and HR hands you your **Labor Relations Score**, from
 *A+ Beloved Overlord* down to *F Galactic Labor Criminal*.
 
